@@ -12,16 +12,18 @@ st.title("📈 Pro Multi-Asset Scanner (Powered by Twelve Data)")
 st.markdown("ระบบวิเคราะห์และคัดกรองสัญญาณ Real-time สำหรับ Forex, คริปโต, หุ้นสหรัฐฯ")
 
 # ==========================================
-# 2. ฟังก์ชันคำนวณ Indicators (คงสมการเดิม)
+# 2. ฟังก์ชันคำนวณ Indicators (อัปเกรด Fibonacci)
 # ==========================================
-def calculate_indicators(df: pd.DataFrame, slope_lookback: int = 5) -> pd.DataFrame:
+def calculate_indicators(df: pd.DataFrame, slope_lookback: int = 5, fib_lookback: int = 20) -> pd.DataFrame:
     data = df.copy()
     close, high, low = data['Close'], data['High'], data['Low']
 
+    # 1. EMAs เดิม
     data['EMA20'] = close.ewm(span=20, adjust=False).mean()
     data['EMA50'] = close.ewm(span=50, adjust=False).mean()
     data['EMA200'] = close.ewm(span=200, adjust=False).mean()
 
+    # 2. คำนวณ ATR และ EMA Angle
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
     tr3 = (low - close.shift(1)).abs()
@@ -32,6 +34,7 @@ def calculate_indicators(df: pd.DataFrame, slope_lookback: int = 5) -> pd.DataFr
     norm_slope = ema_diff / (slope_lookback * data['ATR14'])
     data['EMA20_Angle'] = np.degrees(np.arctan(norm_slope))
 
+    # 3. RSI & MACD
     delta = close.diff()
     gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
     loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
@@ -42,6 +45,10 @@ def calculate_indicators(df: pd.DataFrame, slope_lookback: int = 5) -> pd.DataFr
     macd, macd_sig = ema12 - ema26, (ema12 - ema26).ewm(span=9, adjust=False).mean()
     data['MACD_Hist_Rising'] = (macd - macd_sig) > (macd - macd_sig).shift(1)
 
+    # 4. 🌟 เพิ่มการคำนวณจุด Swing สำหรับ Fibo 🌟
+    data['Rolling_High'] = high.rolling(window=fib_lookback).max()
+    data['Rolling_Low'] = low.rolling(window=fib_lookback).min()
+
     return data
 
 def evaluate_signal(row: pd.Series) -> dict:
@@ -51,26 +58,65 @@ def evaluate_signal(row: pd.Series) -> dict:
     ema200 = float(row['EMA200'])
     ema_angle = float(row['EMA20_Angle'])
     macd_rising = bool(row['MACD_Hist_Rising'])
-
-    bull_stack = (close > ema20) and (ema20 > ema50) and (ema50 > ema200)
-    bear_stack = (close < ema20) and (ema20 < ema50) and (ema50 < ema200)
-
-    trend = "Strong Uptrend" if bull_stack else "Strong Downtrend" if bear_stack else "Sideway/Neutral"
     
-    # ปรับองศาเป็น 10 ตามที่เราคุยกันเพื่อจับสัญญาณได้ไวขึ้น
-    if bull_stack and ema_angle > 10 and macd_rising:
-        action = "BUY"
+    # ข้อมูลสำหรับ Fibo
+    recent_high = float(row['Rolling_High'])
+    recent_low = float(row['Rolling_Low'])
+    atr = float(row['ATR14'])
+
+    # โครงสร้าง Trend
+    bull_stack = (close > ema200) and (ema50 > ema200)
+    bear_stack = (close < ema200) and (ema50 < ema200)
+
+    # 🌟 สมการกาง Fibo (ขาขึ้นวัดจากบนลงล่าง, ขาลงวัดจากล่างขึ้นบน)
+    diff = recent_high - recent_low
+    
+    # ระดับการย่อตัว (Retracement Levels) สำหรับขาขึ้น
+    fibo_up_382 = recent_high - (diff * 0.382)
+    fibo_up_500 = recent_high - (diff * 0.500)
+    fibo_up_618 = recent_high - (diff * 0.618) # Golden Zone
+
+    # ระดับการเด้ง (Retracement Levels) สำหรับขาลง
+    fibo_dn_382 = recent_low + (diff * 0.382)
+    fibo_dn_500 = recent_low + (diff * 0.500)
+    fibo_dn_618 = recent_low + (diff * 0.618)
+
+    # ตั้งระยะความคลาดเคลื่อน (Tolerance) อนุญาตให้ราคาแกว่งใกล้เส้น Fibo ได้ในระยะ 1 ATR
+    tolerance = atr * 1.0 
+    
+    is_near_fibo_up = (abs(close - fibo_up_500) < tolerance) or (abs(close - fibo_up_618) < tolerance)
+    is_near_fibo_dn = (abs(close - fibo_dn_500) < tolerance) or (abs(close - fibo_dn_618) < tolerance)
+
+    # ==========================
+    # 🎯 ตัดสินใจเข้าเทรด (Decision Logic)
+    # ==========================
+    trend_status = "Strong Uptrend" if bull_stack else "Strong Downtrend" if bear_stack else "Sideway/Neutral"
+    
+    # 1. สัญญาณเข้าซื้อแบบย่อตัว (Fibo Pullback) - คุ้มค่าที่สุด
+    if bull_stack and is_near_fibo_up and macd_rising and (row['RSI14'] < 55):
+        action = "BUY (Fibo Pullback 🚀)"
+        
+    # 2. สัญญาณเข้าซื้อแบบตามน้ำ/เบรคเอาท์ (Momentum) - รถกำลังซิ่ง
+    elif bull_stack and ema_angle > 10 and macd_rising:
+        action = "BUY (Momentum)"
+        
+    # 3. สัญญาณขายชอร์ตแบบเด้งเพื่อลงต่อ (Fibo Pullback)
+    elif bear_stack and is_near_fibo_dn and not macd_rising and (row['RSI14'] > 45):
+        action = "SELL (Fibo Pullback 🩸)"
+        
+    # 4. สัญญาณขายแบบตามน้ำ (Momentum)
     elif bear_stack and ema_angle < -10 and not macd_rising:
-        action = "SELL"
+        action = "SELL (Momentum)"
+        
     else:
         action = "WAIT"
 
     return {
         "Price": round(close, 4),
-        "Trend": trend,
+        "Trend": trend_status,
         "EMA_Angle(°)": round(ema_angle, 1),
         "RSI": round(float(row['RSI14']), 1),
-        "ATR": round(float(row['ATR14']), 4),
+        "ATR": round(atr, 4),
         "Signal": action
     }
 
