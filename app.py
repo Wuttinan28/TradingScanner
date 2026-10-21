@@ -3,25 +3,14 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-
-# ==========================================
-# ⚡ ระบบติดตั้งไลบรารีอัตโนมัติ (แก้ปัญหา Streamlit Cloud)
-# ==========================================
-import subprocess
-import sys
-try:
-    from tvdatafeed import TvDatafeed, Interval
-except ModuleNotFoundError:
-    # หากเซิร์ฟเวอร์ไม่มีไลบรารี จะทำการสั่ง pip install ให้ทันทีตอนรันเว็บ
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "git+https://github.com/rongardF/tvdatafeed.git"])
-    from tvdatafeed import TvDatafeed, Interval
+from tvDatafeed import TvDatafeed, Interval  # ตัว D ต้องเป็นตัวพิมพ์ใหญ่
 
 # ==========================================
 # 1. ตั้งค่าหน้าเพจ & เชื่อมต่อ TradingView
 # ==========================================
 st.set_page_config(page_title="Pro Trading Dashboard", layout="wide")
 st.title("📈 Pro Multi-Asset Scanner (Powered by TradingView)")
-st.markdown("ระบบสแกนหุ้นไทย, คริปโต, Forex, หุ้นต่างประเทศ พร้อม Fibo & RSI")
+st.markdown("ระบบสแกนหุ้นไทย, คริปโต, Forex แบบ Real-time")
 
 @st.cache_resource
 def get_tv_connection():
