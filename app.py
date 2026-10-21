@@ -146,4 +146,4 @@ selected_tf_label = st.sidebar.selectbox("เลือก Timeframe", list(tf_op
 selected_tf = tf_options[selected_tf_label]
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("💰
+st.sidebar.subheader("💰 Risk Management")
