@@ -277,3 +277,11 @@ if st.button("🚀 เริ่มสแกน (Scan Now)", use_container_width=
                 with cols[col_idx % 2]:
                     st.plotly_chart(fig, use_container_width=True)
                 col_idx += 1
+
+import time
+
+# --- ระบบ Auto-Refresh ทุกๆ 60 วินาที ---
+st.markdown("---")
+st.caption("🔄 Dashboard จะอัปเดตข้อมูลอัตโนมัติทุกๆ 60 วินาที...")
+time.sleep(60)
+st.rerun()
