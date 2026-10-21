@@ -208,79 +208,88 @@ if st.sidebar.button("🗑️ Remove Ticker") and ticker_to_remove:
     st.rerun()
 
 # ==========================================
-# 5. ส่วนแสดงผลหลัก: สแกนเนอร์ & กราฟ
+# 5. ส่วนแสดงผลหลัก: สแกนเนอร์ & กราฟ (Auto-Scan)
 # ==========================================
 st.subheader(f"📊 สแกนเนอร์ตลาด (Timeframe: {selected_tf_label})")
 
-if st.button("🚀 เริ่มสแกน (Scan Now)", use_container_width=True):
-    with st.spinner(f'กำลังดึงข้อมูล Real-time จาก TradingView...'):
-        results = []
-        charts = {}
-        
-        for ticker in st.session_state['my_watchlist']:
-            try:
-                df = fetch_tradingview(ticker, selected_tf)
-                
-                if not df.empty and len(df) > 200:
-                    df_ind = calculate_indicators(df)
-                    latest = df_ind.iloc[-1]
-                    res = evaluate_signal(latest)
-                    price = res['Price']
-                    atr = res['ATR']
-                    
-                    sl_dist = 1.5 * atr
-                    tp_dist = sl_dist * 1.5
-                    
-                    if "BUY" in res['Signal']:
-                        trade_setup = f"SL: {price - sl_dist:.4f} | TP: {price + tp_dist:.4f}"
-                    elif "SELL" in res['Signal']:
-                        trade_setup = f"SL: {price + sl_dist:.4f} | TP: {price - tp_dist:.4f}"
-                    else:
-                        trade_setup = "-"
-                    
-                    # คำนวณ Position Sizing (แยกหุ้นไทยกับ Forex)
-                    if "SET:" in ticker or "NASDAQ:" in ticker:
-                        position = risk_amount / sl_dist
-                        pos_text = f"{int(position)} หุ้น"
-                    else:
-                        position = risk_amount / (sl_dist * 100000)
-                        pos_text = f"{max(0.01, round(position, 2))} Lot"
-                        
-                    res["Ticker"] = ticker
-                    res["Action_Plan (SL/TP)"] = trade_setup
-                    res["Position_Size"] = pos_text if res['Signal'] != "WAIT" else "-"
-                    results.append(res)
-                    
-                    charts[ticker] = plot_chart(df_ind, ticker)
-            except Exception as e:
-                st.error(f"เกิดข้อผิดพลาดกับ {ticker}: {e}")
-
-        if results:
-            summary_df = pd.DataFrame(results)
-            cols = ["Ticker", "Price", "Trend", "EMA_Angle(°)", "RSI", "Signal", "Action_Plan (SL/TP)", "Position_Size"]
-            summary_df = summary_df[cols]
-
-            def highlight_signal(val):
-                if pd.isna(val): return ''
-                val_str = str(val)
-                if 'BUY' in val_str: return 'background-color: #d4edda; color: green; font-weight: bold'
-                elif 'SELL' in val_str: return 'background-color: #f8d7da; color: red; font-weight: bold'
-                return 'color: gray'
-
-            st.dataframe(summary_df.style.map(highlight_signal, subset=['Signal']), use_container_width=True)
+# ไม่มี st.button แล้ว ระบบจะทำงานทันทีที่โหลดมาถึงบรรทัดนี้
+with st.spinner(f'กำลังดึงข้อมูล Real-time และวิเคราะห์สัญญาณ...'):
+    results = []
+    charts = {}
+    
+    for ticker in st.session_state['my_watchlist']:
+        try:
+            df = fetch_tradingview(ticker, selected_tf)
             
-            st.markdown("---")
-            st.subheader("📈 กราฟราคา Fibo & RSI (Real-time)")
-            cols = st.columns(2)
-            col_idx = 0
-            for tkr, fig in charts.items():
-                with cols[col_idx % 2]:
-                    st.plotly_chart(fig, use_container_width=True)
-                col_idx += 1
+            if not df.empty and len(df) > 200:
+                df_ind = calculate_indicators(df)
+                latest = df_ind.iloc[-1]
+                res = evaluate_signal(latest)
+                price = res['Price']
+                atr = res['ATR']
+                
+                sl_dist = 1.5 * atr
+                tp_dist = sl_dist * 1.5
+                
+                if "BUY" in res['Signal']:
+                    trade_setup = f"SL: {price - sl_dist:.4f} | TP: {price + tp_dist:.4f}"
+                elif "SELL" in res['Signal']:
+                    trade_setup = f"SL: {price + sl_dist:.4f} | TP: {price - tp_dist:.4f}"
+                else:
+                    trade_setup = "-"
+                
+                if "SET:" in ticker or "NASDAQ:" in ticker:
+                    position = risk_amount / sl_dist
+                    pos_text = f"{int(position)} หุ้น"
+                else:
+                    position = risk_amount / (sl_dist * 100000)
+                    pos_text = f"{max(0.01, round(position, 2))} Lot"
+                    
+                res["Ticker"] = ticker
+                res["Action_Plan (SL/TP)"] = trade_setup
+                res["Position_Size"] = pos_text if res['Signal'] != "WAIT" else "-"
+                results.append(res)
+                
+                charts[ticker] = plot_chart(df_ind, ticker)
+        except Exception as e:
+            st.error(f"เกิดข้อผิดพลาดกับ {ticker}: {e}")
 
-import time
+    if results:
+        summary_df = pd.DataFrame(results)
+        cols = ["Ticker", "Price", "Trend", "EMA_Angle(°)", "RSI", "Signal", "Action_Plan (SL/TP)", "Position_Size"]
+        summary_df = summary_df[cols]
+
+        def highlight_signal(val):
+            if pd.isna(val): return ''
+            val_str = str(val)
+            if 'BUY' in val_str: return 'background-color: #d4edda; color: green; font-weight: bold'
+            elif 'SELL' in val_str: return 'background-color: #f8d7da; color: red; font-weight: bold'
+            return 'color: gray'
+
+        # --- แยกตัวที่ต้อง Action ออกมาโชว์เด่นๆ ---
+        actionable_df = summary_df[summary_df['Signal'] != "WAIT"]
+        
+        if not actionable_df.empty:
+            st.success(f"🔥 พบสัญญาณเข้าเทรด (Action Required): {len(actionable_df)} รายการ")
+            st.dataframe(actionable_df.style.map(highlight_signal, subset=['Signal']), use_container_width=True)
+        else:
+            st.info("⏳ ยังไม่มีสัญญาณเข้าเทรดในขณะนี้ (ตลาดยังพักตัว หรือกำลังสร้างเทรนด์ใหม่)")
+            
+        # --- ซ่อนตัวที่ให้รอก่อน (WAIT) ไว้ในเมนูกดขยาย ---
+        with st.expander("📋 ดูข้อมูลสินทรัพย์ที่กำลังเฝ้าระวังทั้งหมด (All Watchlist)"):
+            st.dataframe(summary_df.style.map(highlight_signal, subset=['Signal']), use_container_width=True)
+        
+        st.markdown("---")
+        st.subheader("📈 กราฟราคา Fibo & RSI (Real-time)")
+        cols = st.columns(2)
+        col_idx = 0
+        for tkr, fig in charts.items():
+            with cols[col_idx % 2]:
+                st.plotly_chart(fig, use_container_width=True)
+            col_idx += 1
 
 # --- ระบบ Auto-Refresh ทุกๆ 60 วินาที ---
+import time
 st.markdown("---")
 st.caption("🔄 Dashboard จะอัปเดตข้อมูลอัตโนมัติทุกๆ 60 วินาที...")
 time.sleep(60)
