@@ -2,4 +2,4 @@ streamlit
 pandas
 numpy
 plotly
-tvdatafeed @ git+https://github.com/rongardF/tvdatafeed.git
+git+https://github.com/rongardF/tvdatafeed.git
