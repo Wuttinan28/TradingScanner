@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import requests
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # ==========================================
 # 1. ตั้งค่าหน้าเพจ Streamlit
@@ -142,12 +143,42 @@ def fetch_twelvedata(symbol: str, interval: str, api_key: str):
         raise Exception(response.get('message', 'ไม่สามารถดึงข้อมูลได้ โปรดเช็คชื่อย่อหรือ API Key'))
 
 def plot_chart(df: pd.DataFrame, ticker: str):
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='blue', width=1.5), name='EMA20'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['EMA50'], line=dict(color='orange', width=1.5), name='EMA50'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['EMA200'], line=dict(color='red', width=1.5), name='EMA200'))
-    fig.update_layout(title=f"Chart: {ticker}", xaxis_rangeslider_visible=False, height=450, margin=dict(l=0, r=0, t=40, b=0))
+    # สร้างกราฟแบบแยกส่วน (2 แถว: ราคาด้านบน, RSI ด้านล่าง)
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                        vertical_spacing=0.05, 
+                        subplot_titles=(f"{ticker}", "RSI (14)"),
+                        row_heights=[0.75, 0.25]) # แบ่งสัดส่วน กราฟราคา 75%, RSI 25%
+
+    # 1. กราฟราคา (Candlestick) และเส้น EMA
+    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='dodgerblue', width=1.5), name='EMA20'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA50'], line=dict(color='orange', width=1.5), name='EMA50'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA200'], line=dict(color='red', width=1.5), name='EMA200'), row=1, col=1)
+
+    # 2. คำนวณและวาดเส้น Fibonacci (จากรอบการสวิงล่าสุด)
+    latest_high = df['Rolling_High'].iloc[-1]
+    latest_low = df['Rolling_Low'].iloc[-1]
+    diff = latest_high - latest_low
+    fibo_500 = latest_high - (diff * 0.500)
+    fibo_618 = latest_high - (diff * 0.618)
+
+    # วาดเส้น Fibo ลงบนกราฟ
+    fig.add_hline(y=latest_high, line_dash="dot", line_color="gray", annotation_text="Swing High", row=1, col=1)
+    fig.add_hline(y=latest_low, line_dash="dot", line_color="gray", annotation_text="Swing Low", row=1, col=1)
+    fig.add_hline(y=fibo_500, line_dash="dash", line_color="cyan", annotation_text="Fibo 50.0%", row=1, col=1)
+    fig.add_hline(y=fibo_618, line_dash="dash", line_color="magenta", annotation_text="Fibo 61.8% (Golden Zone)", row=1, col=1)
+
+    # 3. กราฟ RSI ด้านล่าง (Row 2)
+    fig.add_trace(go.Scatter(x=df.index, y=df['RSI14'], line=dict(color='purple', width=1.5), name='RSI'), row=2, col=1)
+    fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1) # เส้น Overbought
+    fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1) # เส้น Oversold
+
+    # ตั้งค่าเค้าโครงกราฟ
+    fig.update_layout(xaxis_rangeslider_visible=False, height=550, margin=dict(l=20, r=20, t=40, b=20), showlegend=False)
+    
+    # ปิด slider ในหน้าต่าง RSI ด้วย
+    fig.update_xaxes(rangeslider_visible=False, row=2, col=1)
+    
     return fig
 
 # ==========================================
