@@ -13,8 +13,6 @@ import os
 # ==========================================
 st.set_page_config(page_title="Pro Trading Dashboard", layout="wide")
 
-# ดึงค่า API Key (รองรับทั้งการรันบน Local และ Render)
-# บน Render ต้องไปใส่ค่าเหล่านี้ใน Environment Variables
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or st.secrets.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY", "")
 
@@ -34,10 +32,11 @@ def get_tv_connection():
 tv = get_tv_connection()
 
 # ==========================================
-# 2. ฟังก์ชันจัดการ Database (Watchlist)
+# 2. ฟังก์ชันจัดการ Database (Watchlist & Order)
 # ==========================================
 def fetch_user_watchlist(email: str):
     res = supabase.table("user_watchlists").select("ticker").eq("user_email", email).execute()
+    # ดึงข้อมูลออกมาตามลำดับที่บันทึกไว้ (เนื่องจากเราใช้วิธีลบและเขียนใหม่เวลาสลับตำแหน่ง)
     return [row["ticker"] for row in res.data]
 
 def add_ticker_to_db(email: str, ticker: str):
@@ -48,11 +47,24 @@ def add_ticker_to_db(email: str, ticker: str):
 def remove_ticker_from_db(email: str, ticker: str):
     supabase.table("user_watchlists").delete().eq("user_email", email).eq("ticker", ticker).execute()
 
+def rebuild_watchlist_db(email: str, new_list: list):
+    # ฟังก์ชันสำหรับจัดเรียงตำแหน่ง: ลบของเดิมทั้งหมด แล้วเขียนใหม่ตามลำดับ
+    supabase.table("user_watchlists").delete().eq("user_email", email).execute()
+    for t in new_list:
+        supabase.table("user_watchlists").insert({"user_email": email, "ticker": t}).execute()
+
 # ==========================================
-# 3. ระบบ Authentication (Login / Register)
+# 3. ระบบ Authentication (แก้ปัญหา F5 หลุดล็อกอิน)
 # ==========================================
 if 'user' not in st.session_state:
     st.session_state['user'] = None
+
+# ตรวจสอบ URL Query Parameter ว่ามี Session ค้างอยู่ไหม (ช่วยจำตอนกด F5)
+if st.session_state['user'] is None and "session_email" in st.query_params:
+    class SessionUser:
+        def __init__(self, email):
+            self.email = email
+    st.session_state['user'] = SessionUser(st.query_params["session_email"])
 
 if st.session_state['user'] is None:
     st.title("🔐 เข้าสู่ระบบ (Pro Multi-Asset Scanner)")
@@ -70,6 +82,8 @@ if st.session_state['user'] is None:
                 try:
                     res = supabase.auth.sign_in_with_password({"email": email, "password": password})
                     st.session_state['user'] = res.user
+                    # ฝังอีเมลไว้ใน URL เพื่อให้ระบบจำได้ตอนรีเฟรชหน้าเว็บ
+                    st.query_params["session_email"] = res.user.email
                     st.rerun()
                 except Exception as e:
                     st.error("อีเมลหรือรหัสผ่านไม่ถูกต้อง (หรือยังไม่ได้สมัครสมาชิก)")
@@ -80,10 +94,10 @@ if st.session_state['user'] is None:
                     st.success("สมัครสมาชิกสำเร็จ! กรุณากดปุ่ม 'เข้าสู่ระบบ' อีกครั้ง")
                 except Exception as e:
                     st.error(f"เกิดข้อผิดพลาด: {e}")
-    st.stop() # หยุดการทำงานตรงนี้ถ้ายังไม่ล็อกอิน
+    st.stop()
 
 # ==========================================
-# 4. ฟังก์ชันคำนวณ Indicators & Fibonacci (เหมือนเดิม)
+# 4. ฟังก์ชันคำนวณ Indicators & Fibonacci
 # ==========================================
 def calculate_indicators(df: pd.DataFrame, slope_lookback: int = 5, fib_lookback: int = 20) -> pd.DataFrame:
     data = df.copy()
@@ -136,7 +150,7 @@ def evaluate_signal(row: pd.Series) -> dict:
     return {"Price": round(close, 4), "Trend": trend_status, "EMA_Angle(°)": round(ema_angle, 1), "RSI": round(float(row['RSI14']), 1), "ATR": round(atr, 4), "Signal": action}
 
 # ==========================================
-# 5. ฟังก์ชันดึงข้อมูล & กราฟ (เหมือนเดิม)
+# 5. ฟังก์ชันดึงข้อมูล & กราฟ
 # ==========================================
 def fetch_tradingview(ticker: str, interval: Interval):
     if ":" in ticker:
@@ -171,17 +185,19 @@ def plot_chart(df: pd.DataFrame, ticker: str):
     return fig
 
 # ==========================================
-# 6. Sidebar & ส่วนแสดงผลหลัก
+# 6. Sidebar (ตั้งค่า, เพิ่มลบ และ จัดเรียงตำแหน่ง)
 # ==========================================
 st.sidebar.markdown(f"👤 **ผู้ใช้งาน:** `{st.session_state['user'].email}`")
 if st.sidebar.button("🚪 ออกจากระบบ (Logout)"):
     supabase.auth.sign_out()
     st.session_state['user'] = None
+    if "session_email" in st.query_params:
+        del st.query_params["session_email"]
     st.rerun()
 
 st.sidebar.header("⚙️ Settings")
 tf_options = {"15 นาที": Interval.in_15_minute, "1 ชั่วโมง": Interval.in_1_hour, "4 ชั่วโมง": Interval.in_4_hour, "1 วัน": Interval.in_daily, "1 สัปดาห์": Interval.in_weekly}
-selected_tf_label = st.sidebar.selectbox("เลือก Timeframe", list(tf_options.keys()), index=3)
+selected_tf_label = st.sidebar.selectbox("เลือก Timeframe", ["15 นาที", "1 ชั่วโมง", "4 ชั่วโมง", "1 วัน", "1 สัปดาห์"], index=3)
 selected_tf = tf_options[selected_tf_label]
 
 st.sidebar.markdown("---")
@@ -191,21 +207,19 @@ risk_pct = st.sidebar.slider("ความเสี่ยงต่อไม้ (
 risk_amount = account_size * (risk_pct / 100)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("📝 My Watchlist")
-st.sidebar.caption("รูปแบบการพิมพ์: EXCHANGE:SYMBOL")
+st.sidebar.subheader("📝 จัดการ Watchlist")
 
-# ดึง Watchlist จาก Supabase ของผู้ใช้คนนี้
 user_email = st.session_state['user'].email
 current_watchlist = fetch_user_watchlist(user_email)
 
-# ถ้าเพิ่งสมัครใหม่และยังไม่มีหุ้นเลย ให้แอดค่าเริ่มต้นลง DB
 if not current_watchlist:
-    default_tickers = ["SET:PTT", "OANDA:XAUUSD", "BINANCE:BTCUSDT"]
+    default_tickers = ["NASDAQ:NVDA", "NASDAQ:TSLA", "BINANCE:BTCUSDT", "BINANCE:SOLUSDT", "OANDA:XAUUSD", "TVC:USOIL"]
     for t in default_tickers:
         add_ticker_to_db(user_email, t)
     current_watchlist = default_tickers
 
-new_ticker = st.sidebar.text_input("เพิ่มชื่อ (เช่น SET:CPALL)")
+# 6.1 เพิ่ม / ลบ สินทรัพย์
+new_ticker = st.sidebar.text_input("เพิ่มชื่อ (เช่น NASDAQ:AAPL)")
 if st.sidebar.button("➕ Add Ticker"):
     ticker_upper = new_ticker.upper().strip()
     if ticker_upper and ticker_upper not in current_watchlist:
@@ -219,68 +233,96 @@ if st.sidebar.button("🗑️ Remove Ticker") and ticker_to_remove:
     remove_ticker_from_db(user_email, ticker_to_remove)
     st.rerun()
 
+# 6.2 ฟังก์ชันใหม่: จัดเรียงตำแหน่ง
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔄 สลับตำแหน่งสินทรัพย์")
+ticker_to_move = st.sidebar.selectbox("เลือก Ticker ที่ต้องการย้าย", current_watchlist, key="move_ticker")
+col_up, col_dn = st.sidebar.columns(2)
+
+if col_up.button("⬆️ เลื่อนขึ้น") and ticker_to_move:
+    idx = current_watchlist.index(ticker_to_move)
+    if idx > 0:
+        # สลับตำแหน่งในลิสต์
+        current_watchlist[idx], current_watchlist[idx-1] = current_watchlist[idx-1], current_watchlist[idx]
+        rebuild_watchlist_db(user_email, current_watchlist)
+        st.rerun()
+
+if col_dn.button("⬇️ เลื่อนลง") and ticker_to_move:
+    idx = current_watchlist.index(ticker_to_move)
+    if idx < len(current_watchlist) - 1:
+        # สลับตำแหน่งในลิสต์
+        current_watchlist[idx], current_watchlist[idx+1] = current_watchlist[idx+1], current_watchlist[idx]
+        rebuild_watchlist_db(user_email, current_watchlist)
+        st.rerun()
+
+# ==========================================
+# 7. ส่วนแสดงผลหลัก (สแกนแบบ Background)
+# ==========================================
 st.title("📈 Pro Multi-Asset Scanner")
-st.subheader(f"📊 สแกนเนอร์ตลาด (Timeframe: {selected_tf_label})")
 
-with st.spinner(f'กำลังดึงข้อมูล Real-time และวิเคราะห์สัญญาณ...'):
-    results = []
-    charts = {}
+# ใช้ @st.fragment เพื่อจำกัดให้ทำงานรีเฟรชเฉพาะส่วนกราฟ/ตารางด้านล่างนี้ โดยหน้าเว็บหลักไม่กะพริบ
+@st.fragment(run_every="60s")
+def run_background_scanner():
+    st.subheader(f"📊 สแกนเนอร์ตลาด (Timeframe: {selected_tf_label})")
+    st.caption(f"⏱️ ข้อมูลอัปเดตล่าสุด: {time.strftime('%H:%M:%S')} (ระบบกำลังแอบตรวจจับสัญญาณเบื้องหลัง...)")
     
-    for ticker in current_watchlist:
-        try:
-            df = fetch_tradingview(ticker, selected_tf)
-            if not df.empty and len(df) > 200:
-                df_ind = calculate_indicators(df)
-                latest = df_ind.iloc[-1]
-                res = evaluate_signal(latest)
-                price, atr = res['Price'], res['ATR']
-                sl_dist, tp_dist = 1.5 * atr, (1.5 * atr) * 1.5
-                
-                if "BUY" in res['Signal']: trade_setup = f"SL: {price - sl_dist:.4f} | TP: {price + tp_dist:.4f}"
-                elif "SELL" in res['Signal']: trade_setup = f"SL: {price + sl_dist:.4f} | TP: {price - tp_dist:.4f}"
-                else: trade_setup = "-"
-                
-                pos_text = f"{int(risk_amount / sl_dist)} หุ้น" if "SET:" in ticker or "NASDAQ:" in ticker else f"{max(0.01, round(risk_amount / (sl_dist * 100000), 2))} Lot"
-                    
-                res["Ticker"] = ticker
-                res["Action_Plan (SL/TP)"] = trade_setup
-                res["Position_Size"] = pos_text if res['Signal'] != "WAIT" else "-"
-                results.append(res)
-                charts[ticker] = plot_chart(df_ind, ticker)
-        except Exception as e:
-            st.error(f"เกิดข้อผิดพลาดกับ {ticker}: {e}")
-
-    if results:
-        summary_df = pd.DataFrame(results)
-        cols = ["Ticker", "Price", "Trend", "EMA_Angle(°)", "RSI", "Signal", "Action_Plan (SL/TP)", "Position_Size"]
-        summary_df = summary_df[cols]
-
-        def highlight_signal(val):
-            val_str = str(val)
-            if 'BUY' in val_str: return 'background-color: #d4edda; color: green; font-weight: bold'
-            elif 'SELL' in val_str: return 'background-color: #f8d7da; color: red; font-weight: bold'
-            return 'color: gray'
-
-        actionable_df = summary_df[summary_df['Signal'] != "WAIT"]
-        if not actionable_df.empty:
-            st.success(f"🔥 พบสัญญาณเข้าเทรด (Action Required): {len(actionable_df)} รายการ")
-            st.dataframe(actionable_df.style.map(highlight_signal, subset=['Signal']), use_container_width=True)
-        else:
-            st.info("⏳ ยังไม่มีสัญญาณเข้าเทรดในขณะนี้")
-            
-        with st.expander("📋 ดูข้อมูลสินทรัพย์ที่กำลังเฝ้าระวังทั้งหมด (All Watchlist)"):
-            st.dataframe(summary_df.style.map(highlight_signal, subset=['Signal']), use_container_width=True)
+    with st.spinner(f'กำลังประมวลผลสัญญาณ...'):
+        results = []
+        charts = {}
         
-        st.markdown("---")
-        st.subheader("📈 กราฟราคา Fibo & RSI (Real-time)")
-        cols = st.columns(2)
-        col_idx = 0
-        for tkr, fig in charts.items():
-            with cols[col_idx % 2]:
-                st.plotly_chart(fig, use_container_width=True)
-            col_idx += 1
+        for ticker in current_watchlist:
+            try:
+                df = fetch_tradingview(ticker, selected_tf)
+                if not df.empty and len(df) > 200:
+                    df_ind = calculate_indicators(df)
+                    latest = df_ind.iloc[-1]
+                    res = evaluate_signal(latest)
+                    price, atr = res['Price'], res['ATR']
+                    sl_dist, tp_dist = 1.5 * atr, (1.5 * atr) * 1.5
+                    
+                    if "BUY" in res['Signal']: trade_setup = f"SL: {price - sl_dist:.4f} | TP: {price + tp_dist:.4f}"
+                    elif "SELL" in res['Signal']: trade_setup = f"SL: {price + sl_dist:.4f} | TP: {price - tp_dist:.4f}"
+                    else: trade_setup = "-"
+                    
+                    pos_text = f"{int(risk_amount / sl_dist)} หุ้น" if "SET:" in ticker or "NASDAQ:" in ticker or "AMEX:" in ticker else f"{max(0.01, round(risk_amount / (sl_dist * 100000), 2))} Lot"
+                        
+                    res["Ticker"] = ticker
+                    res["Action_Plan (SL/TP)"] = trade_setup
+                    res["Position_Size"] = pos_text if res['Signal'] != "WAIT" else "-"
+                    results.append(res)
+                    charts[ticker] = plot_chart(df_ind, ticker)
+            except Exception as e:
+                st.error(f"เกิดข้อผิดพลาดกับ {ticker}: {e}")
 
-st.markdown("---")
-st.caption("🔄 Dashboard จะอัปเดตข้อมูลอัตโนมัติทุกๆ 60 วินาที...")
-time.sleep(60)
-st.rerun()
+        if results:
+            summary_df = pd.DataFrame(results)
+            cols = ["Ticker", "Price", "Trend", "EMA_Angle(°)", "RSI", "Signal", "Action_Plan (SL/TP)", "Position_Size"]
+            summary_df = summary_df[cols]
+
+            def highlight_signal(val):
+                val_str = str(val)
+                if 'BUY' in val_str: return 'background-color: #d4edda; color: green; font-weight: bold'
+                elif 'SELL' in val_str: return 'background-color: #f8d7da; color: red; font-weight: bold'
+                return 'color: gray'
+
+            actionable_df = summary_df[summary_df['Signal'] != "WAIT"]
+            if not actionable_df.empty:
+                st.success(f"🔥 พบสัญญาณเข้าเทรด (Action Required): {len(actionable_df)} รายการ")
+                st.dataframe(actionable_df.style.map(highlight_signal, subset=['Signal']), use_container_width=True)
+            else:
+                st.info("⏳ ยังไม่มีสัญญาณเข้าเทรดในขณะนี้")
+                
+            with st.expander("📋 ดูข้อมูลสินทรัพย์ที่กำลังเฝ้าระวังทั้งหมด (All Watchlist)"):
+                st.dataframe(summary_df.style.map(highlight_signal, subset=['Signal']), use_container_width=True)
+            
+            st.markdown("---")
+            st.subheader("📈 กราฟราคา Fibo & RSI (Real-time)")
+            cols = st.columns(2)
+            col_idx = 0
+            for tkr, fig in charts.items():
+                with cols[col_idx % 2]:
+                    st.plotly_chart(fig, use_container_width=True)
+                col_idx += 1
+
+# เรียกใช้ฟังก์ชันแอบสแกน
+run_background_scanner()
